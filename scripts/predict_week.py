@@ -37,6 +37,7 @@ def main(season: int, week: int, out_path: str):
         out["away_team"].str.upper()
     )
     out = out[["season", "week", "home_team", "away_team", "Win Prob(Home)", "Predicted Winner"]]
+    out = out.sort_values(["Win Prob(Home)"], ascending=False).reset_index(drop=True)
 
     # 5) Save CSV
     Path(os.path.dirname(out_path) or ".").mkdir(parents=True, exist_ok=True)
