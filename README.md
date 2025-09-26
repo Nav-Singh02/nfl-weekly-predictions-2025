@@ -11,7 +11,7 @@ This repository contains an **ensemble** machine learning system that predicts N
 - **Advanced feature engineering** (rolling deltas, turnover differential, points, and **Elo**)
 - **Ensemble learning** combining Random Forest, XGBoost, and Logistic Regression
 - **Isotonic calibration** so probabilities are well-calibrated (not overconfident)
-- Clean, reproducible code in `src/` + `scripts/` (no betting lines)
+- Clean, reproducible code in `src/` + `scripts/`
 
 ## 📊 Data Sources
 - **nfl_data_py**: NFL schedules and historical results (training set: 2015–2024)
