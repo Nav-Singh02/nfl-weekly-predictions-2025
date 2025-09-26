@@ -61,7 +61,7 @@ def aggregate_weekly_to_team_stats(weekly: pd.DataFrame) -> pd.DataFrame:
     df["team"] = df[team_col]
     df["opponent"] = df[opp_col]
 
-    # --- build a single fumbles_lost from available components (missing cols default to 0) ---
+    # Build a single fumbles_lost from available components (missing cols default to 0)
     for col in ["rushing_fumbles_lost", "receiving_fumbles_lost", "sack_fumbles_lost"]:
         if col not in df.columns:
             df[col] = 0
@@ -73,15 +73,13 @@ def aggregate_weekly_to_team_stats(weekly: pd.DataFrame) -> pd.DataFrame:
     )
 
     # --- normalize core numeric columns across possible schemas ---
-    # Passing yards / TDs sometimes appear as pass_yards / pass_touchdowns in some feeds
     df["_pass_yds"] = _first_existing(df, ["passing_yards", "pass_yards"])
     df["_rush_yds"] = _first_existing(df, ["rushing_yards", "rush_yards"])
     df["_pass_td"]  = _first_existing(df, ["passing_tds", "pass_touchdowns"])
     df["_rush_td"]  = _first_existing(df, ["rushing_tds", "rush_touchdowns"])
-    # Interceptions: either 'interceptions' or 'passing_interceptions'
     df["_ints"]     = _first_existing(df, ["interceptions", "passing_interceptions"])
 
-    # Ensure numeric (in case of mixed types)
+    # Ensure numeric
     for c in ["_pass_yds","_rush_yds","_pass_td","_rush_td","_ints","fumbles_lost"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
 
@@ -98,7 +96,7 @@ def aggregate_weekly_to_team_stats(weekly: pd.DataFrame) -> pd.DataFrame:
     # turnover differential (higher is better for the offense)
     agg["turnover_diff"] = -(agg["ints"] + agg["fumbles_lost"])
 
-    # NOTE: "points" is merged later from schedules (placeholder here to keep columns stable)
+    # placeholder for points (merged later)
     if "points" not in agg.columns:
         agg["points"] = 0.0
 
@@ -121,7 +119,7 @@ def add_points_from_schedule(team_stats: pd.DataFrame, schedules: pd.DataFrame) 
     return out
 
 def make_matchup_features(games: pd.DataFrame, team_stats: pd.DataFrame, window: int = 5) -> pd.DataFrame:
-    """Build a matchup row per game with home vs away rolling means and deltas, with week-1 fallback."""
+    """Build a matchup row per game with home vs away rolling means and deltas, with prev-week alignment and week-1 fallback."""
     # 1) Rolling means per (team, season)
     rolled = (
         team_stats
@@ -130,48 +128,61 @@ def make_matchup_features(games: pd.DataFrame, team_stats: pd.DataFrame, window:
         .reset_index(drop=True)
     )
 
-    # 2) Lookups: exact (team, season, week) and latest-known (per team)
-    roll_id_cols = ["team", "season", "week"] + [f"{c}_pg" for c in NUMERIC_COLS]
-    exact = rolled[roll_id_cols].copy()
+    pg_cols = [f"{c}_pg" for c in NUMERIC_COLS]
+
+    # 2) Lookups:
+    #    - exact: (team, season, week) rolling rows
+    #    - latest_non_na: last row per team that has any non-null rolling values
+    exact = rolled[["team", "season", "week"] + pg_cols].copy()
+
+    valid = rolled.dropna(subset=pg_cols, how="all")
     latest = (
-        rolled.sort_values(["team", "season", "week"])
-              .groupby("team", as_index=False)
-              .tail(1)[["team"] + [f"{c}_pg" for c in NUMERIC_COLS]]
+        valid.sort_values(["team", "season", "week"])
+             .groupby("team", as_index=False)
+             .tail(1)[["team"] + pg_cols]
     )
 
-    # 3) Exact merges (home/away)
+    # 3) Align games to PREVIOUS week for rolling stats
+    g = games.copy()
+    g["prev_week"] = g["week"] - 1
+
     home_exact = exact.rename(columns={c: f"home_{c}" for c in exact.columns})
     away_exact = exact.rename(columns={c: f"away_{c}" for c in exact.columns})
+
     feat = (
-        games
-        .merge(home_exact,
-               left_on=["home_team", "season", "week"],
-               right_on=["home_team", "home_season", "home_week"],
-               how="left")
-        .merge(away_exact,
-               left_on=["away_team", "season", "week"],
-               right_on=["away_team", "away_season", "away_week"],
-               how="left")
+        g
+        .merge(
+            home_exact,
+            left_on=["home_team", "season", "prev_week"],
+            right_on=["home_team", "home_season", "home_week"],
+            how="left",
+        )
+        .merge(
+            away_exact,
+            left_on=["away_team", "season", "prev_week"],
+            right_on=["away_team", "away_season", "away_week"],
+            how="left",
+        )
     )
 
-    # 4) Fallback fill with latest-known per team
+    # 4) Fallback: fill missing with latest NON-NA rolling per team
     home_latest = latest.rename(columns={c: f"home_{c}" for c in latest.columns})
     away_latest = latest.rename(columns={c: f"away_{c}" for c in latest.columns})
 
     if feat["home_pass_yds_pg"].isna().any():
         feat = feat.merge(home_latest, on="home_team", how="left", suffixes=("", "_fallback"))
-        for base in [f"{c}_pg" for c in NUMERIC_COLS]:
+        for base in pg_cols:
             feat[f"home_{base}"] = feat[f"home_{base}"].fillna(feat[f"home_{base}_fallback"])
         feat = feat.drop(columns=[c for c in feat.columns if c.endswith("_fallback")], errors="ignore")
 
     if feat["away_pass_yds_pg"].isna().any():
         feat = feat.merge(away_latest, on="away_team", how="left", suffixes=("", "_fallback"))
-        for base in [f"{c}_pg" for c in NUMERIC_COLS]:
+        for base in pg_cols:
             feat[f"away_{base}"] = feat[f"away_{base}"].fillna(feat[f"away_{base}_fallback"])
         feat = feat.drop(columns=[c for c in feat.columns if c.endswith("_fallback")], errors="ignore")
 
     # 5) Differential features: home_pg - away_pg
-    for base in [f"{c}_pg" for c in NUMERIC_COLS]:
+    for base in pg_cols:
         feat[f"delta_{base}"] = feat[f"home_{base}"] - feat[f"away_{base}"]
 
     # 6) Optional label
@@ -181,4 +192,5 @@ def make_matchup_features(games: pd.DataFrame, team_stats: pd.DataFrame, window:
     keep_meta = ["game_id", "season", "week", "home_team", "away_team"]
     keep_model = [c for c in feat.columns if c.startswith("delta_")]
     keep_target = ["home_win"] if "home_win" in feat.columns else []
-    return feat[keep_meta + keep_model + keep_target].copy()
+    out = feat[keep_meta + keep_model + keep_target].copy()
+    return out
