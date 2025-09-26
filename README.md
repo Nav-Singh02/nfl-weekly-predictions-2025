@@ -68,4 +68,4 @@ This repository contains an **ensemble** machine learning system that predicts N
 
 ## 📜 License
 Licensed under the **MIT License**.  
-This project **extends ideas from** Sujar Henry’s public work on weekly NFL predictions; all code in `src/` and `scripts/` is my own implementation organized for a reproducible pipeline.
+This project extends ideas from Sujar Henry on weekly NFL predictions; all code in `src/` and `scripts/` is my own implementation organized for a reproducible pipeline.
