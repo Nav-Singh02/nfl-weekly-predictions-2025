@@ -7,13 +7,13 @@ from src.models import fit_models, predict_proba
 from src.ensemble import combine_probs
 
 def main(season: int, week: int, out_path: str):
-    # 1) History to train on (2015–2024)
-    years = list(range(2015, 2025))
-    weekly_players = nfl.import_weekly_data(years)
+    # 1) History to train on: 2015 up to the season *before* the target season
+    training_years = list(range(2015, season))
+    weekly_players = nfl.import_weekly_data(training_years)
     team_stats = aggregate_weekly_to_team_stats(weekly_players)
 
-    # Labeled training rows from schedules
-    sch = load_schedule(years)
+    # Labeled training rows from schedules (same training_years)
+    sch = load_schedule(training_years)
     train_feat = make_matchup_features(sch, team_stats, window=5).dropna()
     X_cols = [c for c in train_feat.columns if c.startswith("delta_")]
     X_train, y_train = train_feat[X_cols].values, train_feat["home_win"].values
@@ -37,6 +37,7 @@ def main(season: int, week: int, out_path: str):
         out["away_team"].str.upper()
     )
     out = out[["season", "week", "home_team", "away_team", "Win Prob(Home)", "Predicted Winner"]]
+    # Optional: keep most confident picks at the top
     out = out.sort_values(["Win Prob(Home)"], ascending=False).reset_index(drop=True)
 
     # 5) Save CSV
@@ -50,5 +51,6 @@ if __name__ == "__main__":
     ap.add_argument("--week", type=int, required=True)
     ap.add_argument("--out", type=str, default="")
     args = ap.parse_args()
-    out_path = args.out or f"predictions/week_{args.week}.csv"
+    # default: predictions/<season>/week_<week>.csv
+    out_path = args.out or f"predictions/{args.season}/week_{args.week}.csv"
     main(args.season, args.week, out_path)
