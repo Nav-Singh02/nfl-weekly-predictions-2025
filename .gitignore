@@ -1,2 +1,27 @@
+# Environment / secrets
 .env
+
+# Local data folder
 nfl_data/
+
+# macOS system files
+.DS_Store
+
+# Python cache & compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# (Optional) Model artifacts — ignore if you don’t want to version them
+*.joblib
+*.pickle
+*.pkl
