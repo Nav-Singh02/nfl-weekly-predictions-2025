@@ -19,3 +19,19 @@ def get_week_games(season: int, week: int) -> pd.DataFrame:
     """
     sch = load_schedule([season])
     return sch[(sch["season"] == season) & (sch["week"] == week)].reset_index(drop=True)
+
+# --- spread snapshot (pregame) ---
+def get_week_spread_snapshot(season: int, week: int):
+    """
+    Returns a DataFrame with ['home_team','away_team','home_spread_snapshot'].
+    Negative => home favored; Positive => home underdog.
+    Rounded to 1 decimal.
+    """
+    sch = nfl.import_schedules([season])
+    sch = sch[sch["week"] == week][["home_team", "away_team", "spread_line"]].copy()
+    sch = sch.rename(columns={"spread_line": "home_spread_snapshot"})
+    # Flip sign so home favorites are negative
+    sch["home_spread_snapshot"] = (-pd.to_numeric(sch["home_spread_snapshot"], errors="coerce")).round(1)
+    return sch
+
+

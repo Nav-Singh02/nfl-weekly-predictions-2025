@@ -118,6 +118,100 @@ def add_points_from_schedule(team_stats: pd.DataFrame, schedules: pd.DataFrame) 
     out["points"] = out["points"].fillna(0.0)
     return out
 
+# --- REST FEATURES (per team per game) ---
+def compute_team_rest_features(schedule_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Input: schedule_df with at least ['season','week','game_date','home_team','away_team'].
+    Output: DataFrame with per (season, week, team) columns:
+        ['season','week','team','rest_days','short_week','off_bye']
+    Rules:
+      - rest_days = days since team's previous game date (NaN if none)
+      - short_week = 1 if rest_days <= 6 else 0 (0 if NaN)
+      - off_bye = 1 if team had no game in prior week (or rest_days >= 13); 0 if played last week
+    """
+    sch = schedule_df.copy()
+    sch = sch.sort_values(['season', 'week']).reset_index(drop=True)
+
+    # Long form: one row per team per game
+    home = sch[['season','week','game_date','home_team']].rename(columns={'home_team':'team'})
+    away = sch[['season','week','game_date','away_team']].rename(columns={'away_team':'team'})
+    tg = pd.concat([home, away], ignore_index=True).sort_values(['team','season','week']).reset_index(drop=True)
+
+    # Previous game info per team
+    tg['prev_game_date'] = tg.groupby('team')['game_date'].shift(1)
+    tg['prev_week'] = tg.groupby('team')['week'].shift(1)
+    tg['rest_days'] = (pd.to_datetime(tg['game_date']) - pd.to_datetime(tg['prev_game_date'])).dt.days
+
+    # Flags
+    tg['short_week'] = (tg['rest_days'] <= 6).astype('Int64').fillna(0).astype(int)
+    tg['played_last_week'] = (tg['prev_week'] == (tg['week'] - 1)).fillna(False)
+    tg['off_bye'] = ((~tg['played_last_week']) | (tg['rest_days'] >= 13)).astype(int)
+
+    return tg[['season','week','team','rest_days','short_week','off_bye']].copy()
+
+# --- TRAVEL/TZ/ROAD STREAK FEATURES ---
+TEAM_TZ = {
+    # Eastern
+    "BUF":"ET","MIA":"ET","NE":"ET","NYJ":"ET","BAL":"ET","CIN":"ET","CLE":"ET","PIT":"ET",
+    "IND":"ET","JAX":"ET","HOU":"CT","TEN":"CT",
+    "DAL":"CT","NYG":"ET","PHI":"ET","WAS":"ET","DET":"ET",
+    "ATL":"ET","CAR":"ET","TB":"ET",
+    # Central
+    "CHI":"CT","GB":"CT","MIN":"CT","NO":"CT","KC":"CT",
+    # Mountain / Pacific
+    "DEN":"MT","ARI":"MT","SEA":"PT","SF":"PT","LA":"PT","LAC":"PT","LV":"PT"
+}
+TZ_OFFSET = {"ET": 0, "CT": -1, "MT": -2, "PT": -3}
+
+def _team_tz(team: str) -> int:
+    tz = TEAM_TZ.get(team)
+    return TZ_OFFSET.get(tz, 0)
+
+def compute_team_travel_features(schedule_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Returns per (season, week, team) travel features:
+      ['season','week','team','tz_bucket_vs_host','b2b_road','road_3in4']
+    tz_bucket_vs_host: 0 if same tz as host team's base tz, 1 if 1-hr diff, 2 if >=2 hrs.
+    b2b_road: 1 if team was away last week and is away this week.
+    road_3in4: 1 if team plays 3 road games in its last 4 (including this one).
+    """
+    sch = schedule_df.copy().sort_values(["season","week"]).reset_index(drop=True)
+
+    # Long form: one row per team per game with location
+    home = sch[["season","week","game_date","home_team","away_team"]].copy()
+    home = home.rename(columns={"home_team":"team"})
+    home["is_away"] = 0
+    home["host_team"] = home["team"]
+
+    away = sch[["season","week","game_date","home_team","away_team"]].copy()
+    away = away.rename(columns={"away_team":"team"})
+    away["is_away"] = 1
+    away["host_team"] = away["home_team"]
+
+    tg = pd.concat([home, away], ignore_index=True)
+    tg = tg.sort_values(["team","season","week"]).reset_index(drop=True)
+
+    # Time-zone bucket relative to host (uses static team base tz as proxy for stadium tz)
+    tg["tz_diff_hours"] = (tg["host_team"].map(_team_tz) - tg["team"].map(_team_tz)).abs()
+    tg["tz_bucket_vs_host"] = tg["tz_diff_hours"].clip(0, 2)  # 0,1,2 only
+
+    # Rolling road counts for streaks
+    tg["prev_is_away"] = tg.groupby("team")["is_away"].shift(1).fillna(0).astype(int)
+    tg["road_in_last4"] = (
+        tg.groupby("team")["is_away"]
+          .rolling(window=4, min_periods=1)
+          .sum()
+          .reset_index(level=0, drop=True)
+          .astype(int)
+    )
+    # Include this week's away in the rolling window above; flag for 3 in last 4 (including this one)
+    tg["road_3in4"] = (tg["road_in_last4"] >= 3).astype(int)
+
+    # Back-to-back road: today away AND last week away
+    tg["b2b_road"] = ((tg["is_away"] == 1) & (tg["prev_is_away"] == 1)).astype(int)
+
+    return tg[["season","week","team","tz_bucket_vs_host","b2b_road","road_3in4"]].copy()
+
 def make_matchup_features(games: pd.DataFrame, team_stats: pd.DataFrame, window: int = 5) -> pd.DataFrame:
     """Build a matchup row per game with home vs away rolling means and deltas, with prev-week alignment and week-1 fallback."""
     # 1) Rolling means per (team, season)
